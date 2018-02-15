@@ -54,7 +54,7 @@
  * @see http://drupal.org/documentation/install/multi-site
  */
 
-$sites['example-drupal.7.x.dev5.codeenigma.net'] = 'default';
-$sites['example-drupal_sitea.7.x.dev5.codeenigma.net'] = 'sitea';
-$sites['example-drupal_siteb.7.x.dev5.codeenigma.net'] = 'siteb';
+$sites['example-drupal.7.x-multisite.dev5.codeenigma.net'] = 'default';
+$sites['example-drupal_sitea.7.x-multisite.dev5.codeenigma.net'] = 'sitea';
+$sites['example-drupal_siteb.7.x-multisite.dev5.codeenigma.net'] = 'siteb';
 
