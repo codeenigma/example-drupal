@@ -57,4 +57,5 @@
 $sites['example-drupal.8.x-multisite.dev4.codeenigma.net'] = 'default';
 $sites['example-drupal_sitea.8.x-multisite.dev4.codeenigma.net'] = 'sitea';
 $sites['example-drupal_siteb.8.x-multisite.dev4.codeenigma.net'] = 'siteb';
+$sites['example-drupal_sitec.8.x-multisite.dev4.codeenigma.net'] = 'sitec';
 
