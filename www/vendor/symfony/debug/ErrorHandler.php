@@ -103,6 +103,7 @@ class ErrorHandler
     private static $stackedErrors = array();
     private static $stackedErrorLevels = array();
     private static $toStringException = null;
+    private static $exitCode = 0;
 
     /**
      * Same init value as thrownErrors.
@@ -148,10 +149,24 @@ class ErrorHandler
             $handler = $prev[0];
             $replace = false;
         }
-        if ($replace || !$prev) {
-            $handler->setExceptionHandler(set_exception_handler(array($handler, 'handleException')));
-        } else {
+        if (!$replace && $prev) {
             restore_error_handler();
+            $handlerIsRegistered = is_array($prev) && $handler === $prev[0];
+        } else {
+            $handlerIsRegistered = true;
+        }
+        if (is_array($prev = set_exception_handler(array($handler, 'handleException'))) && $prev[0] instanceof self) {
+            restore_exception_handler();
+            if (!$handlerIsRegistered) {
+                $handler = $prev[0];
+            } elseif ($handler !== $prev[0] && $replace) {
+                set_exception_handler(array($handler, 'handleException'));
+                $p = $prev[0]->setExceptionHandler(null);
+                $handler->setExceptionHandler($p);
+                $prev[0]->setExceptionHandler($p);
+            }
+        } else {
+            $handler->setExceptionHandler($prev);
         }
 
         $handler->throwAt($levels & $handler->thrownErrors, true);
@@ -432,7 +447,7 @@ class ErrorHandler
                 $throw = new \ErrorException($this->levels[$type].': '.$message, 0, $type, $file, $line);
             }
 
-            if (PHP_VERSION_ID <= 50407 && (PHP_VERSION_ID >= 50400 || PHP_VERSION_ID <= 50317)) {
+            if (\PHP_VERSION_ID <= 50407 && (\PHP_VERSION_ID >= 50400 || \PHP_VERSION_ID <= 50317)) {
                 // Exceptions thrown from error handlers are sometimes not caught by the exception
                 // handler and shutdown handlers are bypassed before 5.4.8/5.3.18.
                 // We temporarily re-enable display_errors to prevent any blank page related to this bug.
@@ -547,10 +562,14 @@ class ErrorHandler
      */
     public function handleException($exception, array $error = null)
     {
+        if (null === $error) {
+            self::$exitCode = 255;
+        }
         if (!$exception instanceof \Exception) {
             $exception = new FatalThrowableError($exception);
         }
         $type = $exception instanceof FatalErrorException ? $exception->getSeverity() : E_ERROR;
+        $handlerException = null;
 
         if (($this->loggedErrors & $type) || $exception instanceof FatalThrowableError) {
             $e = array(
@@ -595,18 +614,21 @@ class ErrorHandler
                 }
             }
         }
-        if (empty($this->exceptionHandler)) {
-            throw $exception; // Give back $exception to the native handler
-        }
+        $exceptionHandler = $this->exceptionHandler;
+        $this->exceptionHandler = null;
         try {
-            call_user_func($this->exceptionHandler, $exception);
+            if (null !== $exceptionHandler) {
+                return \call_user_func($exceptionHandler, $exception);
+            }
+            $handlerException = $handlerException ?: $exception;
         } catch (\Exception $handlerException) {
         } catch (\Throwable $handlerException) {
         }
-        if (isset($handlerException)) {
-            $this->exceptionHandler = null;
-            $this->handleException($handlerException);
+        if ($exception === $handlerException) {
+            self::$reservedMemory = null; // Disable the fatal error handler
+            throw $exception; // Give back $exception to the native handler
         }
+        $this->handleException($handlerException);
     }
 
     /**
@@ -622,17 +644,41 @@ class ErrorHandler
             return;
         }
 
-        self::$reservedMemory = null;
+        $handler = self::$reservedMemory = null;
+        $handlers = array();
+        $previousHandler = null;
+        $sameHandlerLimit = 10;
 
-        $handler = set_error_handler('var_dump');
-        $handler = is_array($handler) ? $handler[0] : null;
-        restore_error_handler();
+        while (!is_array($handler) || !$handler[0] instanceof self) {
+            $handler = set_exception_handler('var_dump');
+            restore_exception_handler();
 
-        if (!$handler instanceof self) {
+            if (!$handler) {
+                break;
+            }
+            restore_exception_handler();
+
+            if ($handler !== $previousHandler) {
+                array_unshift($handlers, $handler);
+                $previousHandler = $handler;
+            } elseif (0 === --$sameHandlerLimit) {
+                $handler = null;
+                break;
+            }
+        }
+        foreach ($handlers as $h) {
+            set_exception_handler($h);
+        }
+        if (!$handler) {
             return;
         }
+        if ($handler !== $h) {
+            $handler[0]->setExceptionHandler($h);
+        }
+        $handler = $handler[0];
+        $handlers = array();
 
-        if (null === $error) {
+        if ($exit = null === $error) {
             $error = error_get_last();
         }
 
@@ -656,14 +702,20 @@ class ErrorHandler
             } else {
                 $exception = new FatalErrorException($handler->levels[$error['type']].': '.$error['message'], 0, $error['type'], $error['file'], $error['line'], 2, true, $trace);
             }
-        } elseif (!isset($exception)) {
-            return;
         }
 
         try {
-            $handler->handleException($exception, $error);
+            if (isset($exception)) {
+                self::$exitCode = 255;
+                $handler->handleException($exception, $error);
+            }
         } catch (FatalErrorException $e) {
             // Ignore this re-throw
+        }
+
+        if ($exit && self::$exitCode) {
+            $exitCode = self::$exitCode;
+            register_shutdown_function('register_shutdown_function', function () use ($exitCode) { exit($exitCode); });
         }
     }
 
@@ -733,7 +785,7 @@ class ErrorHandler
      */
     public function setLevel($level)
     {
-        @trigger_error('The '.__METHOD__.' method is deprecated since version 2.6 and will be removed in 3.0. Use the throwAt() method instead.', E_USER_DEPRECATED);
+        @trigger_error('The '.__METHOD__.' method is deprecated since Symfony 2.6 and will be removed in 3.0. Use the throwAt() method instead.', E_USER_DEPRECATED);
 
         $level = null === $level ? error_reporting() : $level;
         $this->throwAt($level, true);
@@ -748,7 +800,7 @@ class ErrorHandler
      */
     public function setDisplayErrors($displayErrors)
     {
-        @trigger_error('The '.__METHOD__.' method is deprecated since version 2.6 and will be removed in 3.0. Use the throwAt() method instead.', E_USER_DEPRECATED);
+        @trigger_error('The '.__METHOD__.' method is deprecated since Symfony 2.6 and will be removed in 3.0. Use the throwAt() method instead.', E_USER_DEPRECATED);
 
         if ($displayErrors) {
             $this->throwAt($this->displayErrors, true);
@@ -769,7 +821,7 @@ class ErrorHandler
      */
     public static function setLogger(LoggerInterface $logger, $channel = 'deprecation')
     {
-        @trigger_error('The '.__METHOD__.' static method is deprecated since version 2.6 and will be removed in 3.0. Use the setLoggers() or setDefaultLogger() methods instead.', E_USER_DEPRECATED);
+        @trigger_error('The '.__METHOD__.' static method is deprecated since Symfony 2.6 and will be removed in 3.0. Use the setLoggers() or setDefaultLogger() methods instead.', E_USER_DEPRECATED);
 
         $handler = set_error_handler('var_dump');
         $handler = is_array($handler) ? $handler[0] : null;
@@ -794,7 +846,7 @@ class ErrorHandler
      */
     public function handle($level, $message, $file = 'unknown', $line = 0, $context = array())
     {
-        $this->handleError(E_USER_DEPRECATED, 'The '.__METHOD__.' method is deprecated since version 2.6 and will be removed in 3.0. Use the handleError() method instead.', __FILE__, __LINE__, array());
+        $this->handleError(E_USER_DEPRECATED, 'The '.__METHOD__.' method is deprecated since Symfony 2.6 and will be removed in 3.0. Use the handleError() method instead.', __FILE__, __LINE__, array());
 
         return $this->handleError($level, $message, $file, $line, (array) $context);
     }
@@ -806,7 +858,7 @@ class ErrorHandler
      */
     public function handleFatal()
     {
-        @trigger_error('The '.__METHOD__.' method is deprecated since version 2.6 and will be removed in 3.0. Use the handleFatalError() method instead.', E_USER_DEPRECATED);
+        @trigger_error('The '.__METHOD__.' method is deprecated since Symfony 2.6 and will be removed in 3.0. Use the handleFatalError() method instead.', E_USER_DEPRECATED);
 
         static::handleFatalError();
     }
