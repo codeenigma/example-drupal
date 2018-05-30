@@ -67,6 +67,6 @@ function panels_update_8401() {
 /**
  * Breaking updates deliberately!
  */
-function panels_update_8401() {
+function panels_update_8402() {
   foobar();
 }
