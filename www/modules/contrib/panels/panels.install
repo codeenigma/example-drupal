@@ -63,3 +63,10 @@ function panels_update_8401() {
     \Drupal::service('module_installer')->install(['layout_discovery'], FALSE);
   }
 }
+
+/**
+ * Breaking updates deliberately!
+ */
+function panels_update_8401() {
+  foobar();
+}
